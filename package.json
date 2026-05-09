@@ -1,0 +1,24 @@
+{
+  "name": "rune",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The most in-depth, simple environment for agents",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -n web,gateway -c cyan,magenta \"pnpm --filter @rune/web dev\" \"pnpm --filter @rune/gateway dev\"",
+    "dev:web": "pnpm --filter @rune/web dev",
+    "dev:gateway": "pnpm --filter @rune/gateway dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.6.3"
+  }
+}

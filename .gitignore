@@ -1,0 +1,45 @@
+# --- dependencies / build artefacts ---
+node_modules/
+.next/
+.turbo/
+dist/
+build/
+out/
+*.tsbuildinfo
+.pnpm-store/
+.cache/
+
+# --- secrets & env (NEVER commit) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+.supabase/.env
+
+# --- local data folders (Rune's source-of-truth lives here, not in git) ---
+rune/
+.rune/
+
+# Stray scratch/project data accidentally created under apps/gateway/ (e.g.
+# when workspace_root was set there during local testing). Real data lives
+# under $HOME/rune which is already ignored above.
+/apps/gateway/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*/
+
+# Supabase CLI runtime cache (linked-project ref, version probes, etc).
+supabase/.temp/
+
+# --- editor / OS ---
+.DS_Store
+Thumbs.db
+*.swp
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# --- deploy ---
+.vercel
+.netlify

@@ -1,0 +1,33 @@
+{
+  "name": "@rune/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "rune": "./src/cli.ts"
+  },
+  "scripts": {
+    "dev": "cd ../.. && bun --watch run apps/gateway/src/cli.ts start",
+    "start": "bun run src/cli.ts start",
+    "login": "bun run src/cli.ts login",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.6",
+    "@rune/runtimes": "workspace:*",
+    "@rune/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.46.1",
+    "chokidar": "^4.0.1",
+    "gray-matter": "^4.0.3",
+    "hono": "^4.6.10",
+    "ulid": "^2.3.0",
+    "ws": "^8.20.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.13",
+    "@types/node": "^22.9.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.6.3"
+  }
+}
