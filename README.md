@@ -19,6 +19,24 @@ rune/
 
 ## Getting started
 
+## HOW TO USE RUNE IF YOU ARE USING THE PUBLICALLY AVAILABLE APP
+
+Until i setup an npm org or whatever, the only way you can use the gateway is by:
+
+#1: Opening your terminal and cloning this repo:
+
+``` git clone https://github.com/embeputer/rune.git ```
+
+#2: cd to rune (it's probably in your user folder!)
+
+#3: quickly detouring back to https://rune-dev.vercel.app/account and generating a pairing key, copying it and coming back to your terminal
+
+#4: run ``` bun run apps/gateway/src/cli.ts ``` (sorry for this obnoxious shit) and when asked, paste in your pairing key!
+
+#5: and last, run ``` pnpm dev:gateway ```
+
+Bada bing bada boom, you are ready to rune!
+
 ### 1. Install dependencies
 
 ```sh
