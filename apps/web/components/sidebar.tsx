@@ -301,15 +301,15 @@ export function Sidebar({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--color-bg-elev-2)]"
+            className="group flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--color-bg-elev-2)]"
           >
             <Avatar
               src={avatarUrl}
               fallback={workspaceName.charAt(0)}
-              size={28}
+              size={24}
               className="shrink-0"
             />
-            <span className="min-w-0 flex-1 truncate text-lg font-semibold tracking-tight">
+            <span className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight">
               {workspaceName}
             </span>
             <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-[var(--color-fg-subtle)] group-hover:text-[var(--color-fg-muted)]" />
