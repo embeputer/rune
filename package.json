@@ -20,5 +20,10 @@
     "@biomejs/biome": "^1.9.4",
     "concurrently": "^9.1.0",
     "typescript": "^5.6.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "postcss@<8.5.10": ">=8.5.10"
+    }
   }
 }
