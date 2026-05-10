@@ -19,6 +19,7 @@ import {
   Search,
   Settings as SettingsIcon,
   Trash2,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSelectedLayoutSegments } from "next/navigation";
@@ -93,10 +94,19 @@ function computeCounts(runes: SidebarRune[]): ProjectCounts {
   return c;
 }
 
-function deriveWorkspaceName(email: string): string {
+export function deriveWorkspaceName(email: string): string {
   if (!email) return "rune";
   const local = email.split("@")[0] ?? email;
   return local.toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 32) || "rune";
+}
+
+export interface SidebarProps {
+  userEmail: string;
+  username: string | null;
+  avatarUrl: string | null;
+  projects: SidebarProject[];
+  runes: SidebarRune[];
+  initialGateways: GatewaySummary[];
 }
 
 export function Sidebar({
@@ -106,13 +116,11 @@ export function Sidebar({
   projects,
   runes,
   initialGateways,
-}: {
-  userEmail: string;
-  username: string | null;
-  avatarUrl: string | null;
-  projects: SidebarProject[];
-  runes: SidebarRune[];
-  initialGateways: GatewaySummary[];
+  mobileOpen = false,
+  onMobileClose,
+}: SidebarProps & {
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }) {
   const router = useRouter();
   const segments = useSelectedLayoutSegments();
@@ -260,7 +268,34 @@ export function Sidebar({
   }, [projects, runesByProject, query]);
 
   return (
-    <aside className="flex h-screen flex-col gap-2 border-r border-[var(--color-border)] bg-[var(--color-bg-elev)] px-2 pt-2 pb-3">
+    <aside
+      id="rune-sidebar"
+      aria-hidden={!mobileOpen ? undefined : false}
+      className={cn(
+        // Base layout (shared across breakpoints).
+        "flex flex-col gap-2 border-r border-[var(--color-border)] bg-[var(--color-bg-elev)] px-2 pt-2 pb-3",
+        // Mobile: behave as an off-canvas drawer that slides in from the left.
+        // Width is wider than desktop (280 vs 260) so the touch targets feel
+        // less cramped, and `h-dvh` plays nice with mobile browser chrome.
+        "fixed inset-y-0 left-0 z-50 h-dvh w-[280px] shadow-2xl transition-transform duration-200 ease-out",
+        mobileOpen ? "translate-x-0" : "-translate-x-full",
+        // Desktop: pin the sidebar back into the layout grid column.
+        "md:static md:z-auto md:h-screen md:w-auto md:translate-x-0 md:shadow-none md:transition-none",
+      )}
+    >
+      {/* Mobile-only header row with the close button. Hidden on md+ where
+          the sidebar is permanent and a close affordance would be confusing. */}
+      <div className="-mx-1 mb-1 flex items-center justify-end px-1 md:hidden">
+        <button
+          type="button"
+          onClick={onMobileClose}
+          aria-label="Close menu"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-fg-muted)] transition-colors hover:bg-[var(--color-bg-elev-2)] hover:text-[var(--color-fg)]"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
       {/* Workspace selector */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

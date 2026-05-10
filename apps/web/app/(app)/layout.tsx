@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { Sidebar } from "@/components/sidebar";
+import { AppShell } from "@/components/app-shell";
+import { deriveWorkspaceName } from "@/components/sidebar";
 import { accentCss, isAccentKey } from "@/lib/accents";
 import { createClient } from "@/lib/supabase/server";
 
@@ -41,6 +42,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     isAccentKey(settings?.accent_color) ? settings.accent_color : null,
   );
 
+  const userEmail = user.email ?? "";
+  const username = settings?.username ?? null;
+  const workspaceName = username?.trim() || deriveWorkspaceName(userEmail);
+
   return (
     <>
       {accentOverride && (
@@ -49,17 +54,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         // user hasn't picked one this is null and globals.css owns the value.
         <style dangerouslySetInnerHTML={{ __html: accentOverride }} />
       )}
-      <div className="grid min-h-screen grid-cols-[260px_1fr]">
-        <Sidebar
-          userEmail={user.email ?? ""}
-          username={settings?.username ?? null}
-          avatarUrl={settings?.avatar_url ?? null}
-          projects={projects ?? []}
-          runes={runes ?? []}
-          initialGateways={gateways ?? []}
-        />
-        <main className="flex min-h-screen flex-col overflow-hidden">{children}</main>
-      </div>
+      <AppShell
+        workspaceName={workspaceName}
+        sidebar={{
+          userEmail,
+          username,
+          avatarUrl: settings?.avatar_url ?? null,
+          projects: projects ?? [],
+          runes: runes ?? [],
+          initialGateways: gateways ?? [],
+        }}
+      >
+        {children}
+      </AppShell>
     </>
   );
 }

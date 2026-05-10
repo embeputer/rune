@@ -8,7 +8,7 @@ import {
   type RuneStatus,
   type RuntimeId,
 } from "@rune/shared";
-import { FileText, MessageSquare, Play, Square } from "lucide-react";
+import { FileText, MessageSquare, Play, Square, Wrench, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { createClient } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
 
 const Editor = dynamic(() => import("@/components/markdown-editor"), { ssr: false });
 
@@ -151,7 +152,7 @@ export function RuneEditorPage({
 
   return (
     <div className="grid flex-1 grid-rows-[auto_1fr] overflow-hidden">
-      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-elev)] px-6 py-2.5">
+      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-elev)] px-3 py-2.5 md:gap-3 md:px-6">
         <Breadcrumb
           projectName={project.name}
           projectSlug={project.slug}
@@ -395,17 +396,21 @@ function DocLayout({
   onBodyChange: (v: string) => void;
   isBusy: boolean;
 }) {
+  // On mobile we collapse the two-pane grid into a flex column so the prompt
+  // sits on top of the preview/output. Each pane keeps its own internal
+  // scroller (CodeMirror, ReactMarkdown viewer, OutputPane) so the user
+  // doesn't end up with nested scroll inside the page.
   return (
-    <div className="grid min-h-0 grid-cols-2 overflow-hidden">
-      <div className="flex min-h-0 flex-col border-r border-[var(--color-border)]">
-        <div className="px-6 pt-3 text-[10px] uppercase tracking-widest text-[var(--color-fg-subtle)]">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:grid md:grid-cols-2">
+      <div className="flex min-h-0 flex-1 flex-col border-b border-[var(--color-border)] md:border-b-0 md:border-r">
+        <div className="px-3 pt-3 text-[10px] uppercase tracking-widest text-[var(--color-fg-subtle)] md:px-6">
           prompt
         </div>
-        <div className="min-h-0 flex-1 overflow-hidden px-6 pb-3">
+        <div className="min-h-0 flex-1 overflow-hidden px-3 pb-3 md:px-6">
           <Editor value={body} onChange={onBodyChange} />
         </div>
       </div>
-      <div className="flex min-h-0 flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {isScratch ? (
           <>
             <OutputPane status={status} output={output} />
@@ -413,21 +418,21 @@ function DocLayout({
           </>
         ) : (
           <>
-            <div className="px-6 pt-3 text-[10px] uppercase tracking-widest text-[var(--color-fg-subtle)]">
+            <div className="px-3 pt-3 text-[10px] uppercase tracking-widest text-[var(--color-fg-subtle)] md:px-6">
               preview
             </div>
-            <div className="prose-rune min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+            <div className="prose-rune min-h-0 flex-1 overflow-y-auto px-3 pb-6 md:px-6">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {body || "*Empty rune…*"}
               </ReactMarkdown>
             </div>
             {output && (
               <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)]">
-                <div className="flex items-center justify-between px-6 pt-2 text-[10px] uppercase tracking-widest text-[var(--color-fg-subtle)]">
+                <div className="flex items-center justify-between px-3 pt-2 text-[10px] uppercase tracking-widest text-[var(--color-fg-subtle)] md:px-6">
                   <span>output</span>
                   <span>{status}</span>
                 </div>
-                <div className="prose-rune prose-rune--compact max-h-64 overflow-y-auto px-6 py-3 text-sm">
+                <div className="prose-rune prose-rune--compact max-h-64 overflow-y-auto px-3 py-3 text-sm md:px-6">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{output}</ReactMarkdown>
                 </div>
               </div>
@@ -457,19 +462,95 @@ function ChatLayout({
   gatewayToken: string | null;
   initialMessages: RuneMessageRow[];
 }) {
+  // Mobile-only: the diffs/terminal side panel is hidden behind a "Tools"
+  // FAB. On md+ this state is unused and the panel is always rendered
+  // alongside the chat thread as a static column.
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+
+  // Tracks whether we're currently below the md breakpoint so we can drive
+  // RuneSidePanel into "fluid" mode (no resize, no collapsed strip, fills
+  // its parent's width). We can't make this a pure CSS responsive — the
+  // panel decides its render shape based on `fluid` at the JSX level.
+  const [isCompact, setIsCompact] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia("(max-width: 767px)");
+    const sync = () => setIsCompact(mql.matches);
+    sync();
+    mql.addEventListener("change", sync);
+    return () => mql.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!mobilePanelOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMobilePanelOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobilePanelOpen]);
+
   return (
-    <div className="flex min-h-0 overflow-hidden">
+    <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-h-0 flex-1 flex-col">
         <RuneChatThread runeId={runeId} initialMessages={initialMessages} />
       </div>
-      <RuneSidePanel
-        runeId={runeId}
-        projectId={projectId}
-        cwd={cwd}
-        githubRepo={githubRepo}
-        gatewayId={gatewayId}
-        gatewayToken={gatewayToken}
-      />
+
+      {/* Mobile-only floating Tools toggle — opens the diffs/terminal drawer.
+          Sits above the chat input but below dialogs (z-20). */}
+      <button
+        type="button"
+        onClick={() => setMobilePanelOpen(true)}
+        aria-label="Open tools"
+        className="absolute bottom-20 right-3 z-20 flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-elev)] px-3 py-1.5 text-xs font-medium text-[var(--color-fg)] shadow-lg transition-colors hover:bg-[var(--color-bg-elev-2)] md:hidden"
+      >
+        <Wrench className="h-3.5 w-3.5" />
+        Tools
+      </button>
+
+      {/* Backdrop (mobile-only, only when drawer is open) */}
+      {mobilePanelOpen && (
+        <button
+          type="button"
+          aria-label="Close tools"
+          onClick={() => setMobilePanelOpen(false)}
+          className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm md:hidden"
+        />
+      )}
+
+      {/* Side panel — slides in from the right on mobile, static column on
+          desktop. We always render the panel; the wrapper handles the
+          show/hide via translate so the iframe state inside (terminal,
+          diffs polling) survives toggles. */}
+      <div
+        className={cn(
+          "fixed inset-y-0 right-0 z-40 flex w-[88vw] max-w-[420px] transform transition-transform duration-200 ease-out",
+          mobilePanelOpen ? "translate-x-0" : "translate-x-full",
+          "md:static md:z-auto md:w-auto md:max-w-none md:translate-x-0 md:transition-none",
+        )}
+      >
+        {/* Mobile-only close header — desktop relies on the panel's own
+            collapse button. */}
+        <div className="absolute right-2 top-2 z-10 md:hidden">
+          <button
+            type="button"
+            onClick={() => setMobilePanelOpen(false)}
+            aria-label="Close tools"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-elev-2)] hover:text-[var(--color-fg)]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <RuneSidePanel
+          runeId={runeId}
+          projectId={projectId}
+          cwd={cwd}
+          githubRepo={githubRepo}
+          gatewayId={gatewayId}
+          gatewayToken={gatewayToken}
+          fluid={isCompact}
+        />
+      </div>
     </div>
   );
 }
@@ -477,11 +558,11 @@ function ChatLayout({
 function OutputPane({ status, output }: { status: RuneStatus; output: string }) {
   return (
     <>
-      <div className="flex items-center justify-between px-6 pt-3 text-[10px] uppercase tracking-widest text-[var(--color-fg-subtle)]">
+      <div className="flex items-center justify-between px-3 pt-3 text-[10px] uppercase tracking-widest text-[var(--color-fg-subtle)] md:px-6">
         <span>output</span>
         <span>{status}</span>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4 pt-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-2 md:px-6">
         {output ? (
           <div className="prose-rune text-sm">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{output}</ReactMarkdown>

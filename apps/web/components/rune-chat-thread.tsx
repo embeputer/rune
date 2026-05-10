@@ -136,7 +136,7 @@ export function RuneChatThread({ runeId, initialMessages }: Props) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto px-3 py-5 md:px-6">
         {messages.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-[var(--color-fg-subtle)]">
             Send a message to start the conversation.
