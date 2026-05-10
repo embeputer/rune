@@ -17,10 +17,14 @@ interface Props {
   projectId: string;
   githubRepo: string | null;
   gatewayId: string | null;
+  /** Server-rendered token. When supplied we skip the network fetch entirely. */
+  initialToken?: string | null;
 }
 
-export function DiffsPanel({ projectId, githubRepo, gatewayId }: Props) {
-  const [token, setToken] = useState<string | null>(null);
+const POLL_MS = 8_000;
+
+export function DiffsPanel({ projectId, githubRepo, gatewayId, initialToken }: Props) {
+  const [token, setToken] = useState<string | null>(initialToken ?? null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [status, setStatus] = useState<GitStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,13 +33,20 @@ export function DiffsPanel({ projectId, githubRepo, gatewayId }: Props) {
   const [committing, setCommitting] = useState(false);
   const [opening, setOpening] = useState(false);
 
-  const tokenRef = useRef<string | null>(null);
+  const tokenRef = useRef<string | null>(token);
   tokenRef.current = token;
+  const lastDiffRef = useRef<string | null>(null);
 
-  // Fetch the gateway client_token once we know which gateway is online.
+  // If the server supplied the token, skip the round-trip entirely. We only
+  // call /api/gateways/:id/token as a fallback for hosts that don't pre-load.
   useEffect(() => {
     if (!gatewayId) {
       setToken(null);
+      setTokenError(null);
+      return;
+    }
+    if (initialToken) {
+      setToken(initialToken);
       setTokenError(null);
       return;
     }
@@ -53,7 +64,7 @@ export function DiffsPanel({ projectId, githubRepo, gatewayId }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [gatewayId]);
+  }, [gatewayId, initialToken]);
 
   const refresh = useCallback(async () => {
     const t = tokenRef.current;
@@ -62,27 +73,66 @@ export function DiffsPanel({ projectId, githubRepo, gatewayId }: Props) {
     setError(null);
     try {
       const s = await getGitStatus(projectId, t);
-      setStatus(s);
+      // Avoid re-rendering the (possibly huge) diff view when the response
+      // is byte-identical to the previous tick — common when polling a clean
+      // tree or one that hasn't changed since the last sample.
+      if (lastDiffRef.current !== null && lastDiffRef.current === s.diff && status) {
+        // Only swap status if metadata (branch/ahead/behind/files) changed.
+        const same =
+          status.branch === s.branch &&
+          status.ahead === s.ahead &&
+          status.behind === s.behind &&
+          status.files.length === s.files.length;
+        if (!same) setStatus(s);
+      } else {
+        lastDiffRef.current = s.diff;
+        setStatus(s);
+      }
     } catch (err) {
       setError((err as Error).message);
       setStatus(null);
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, status]);
 
-  // Initial + 4s polling while we have a token.
+  // Initial fetch + adaptive polling: only tick when the document is visible
+  // (no point hammering git when the tab is in the background).
   useEffect(() => {
     if (!token) return;
     void refresh();
-    const id = setInterval(() => {
-      void refresh();
-    }, 4000);
-    return () => clearInterval(id);
+
+    let interval: ReturnType<typeof setInterval> | null = null;
+    function start() {
+      if (interval) return;
+      interval = setInterval(() => void refresh(), POLL_MS);
+    }
+    function stop() {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    }
+    function onVisibility() {
+      if (document.visibilityState === "visible") {
+        void refresh();
+        start();
+      } else {
+        stop();
+      }
+    }
+    if (typeof document !== "undefined" && document.visibilityState === "visible") {
+      start();
+    }
+    document?.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document?.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [token, refresh]);
 
   async function commit() {
-    if (!token) return;
+    if (!token || !githubRepo) return;
     const message = commitMessage.trim();
     if (!message) return;
     setCommitting(true);
@@ -128,8 +178,13 @@ export function DiffsPanel({ projectId, githubRepo, gatewayId }: Props) {
   }
 
   const fileCount = status?.files.length ?? 0;
-  const ableToCommit = Boolean(token) && fileCount > 0 && commitMessage.trim().length > 0;
+  // Diff *viewing* works for any local git repo. The Commit + PR actions
+  // both gate on a linked GitHub repo — without one there's no upstream to
+  // push to, so committing locally would just dead-end. Linking a repo
+  // unlocks both buttons together.
   const repoLinked = Boolean(githubRepo);
+  const ableToCommit =
+    Boolean(token) && repoLinked && fileCount > 0 && commitMessage.trim().length > 0;
   const ableToOpenPr = Boolean(token) && repoLinked;
 
   return (
@@ -183,7 +238,10 @@ export function DiffsPanel({ projectId, githubRepo, gatewayId }: Props) {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void commit();
           }}
         />
-        <div className="flex items-center gap-2">
+        <div
+          className="flex items-center gap-2"
+          title={!repoLinked ? "Link a GitHub repo on this project to enable commits & PRs" : undefined}
+        >
           <Button size="sm" disabled={!ableToCommit || committing} onClick={commit}>
             {committing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -192,26 +250,24 @@ export function DiffsPanel({ projectId, githubRepo, gatewayId }: Props) {
             )}
             Commit
           </Button>
-          <div className="relative flex-1" title={!repoLinked ? "Link a repo to use these" : undefined}>
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-full"
-              disabled={!ableToOpenPr || opening}
-              onClick={openPr}
-            >
-              {opening ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <GitPullRequest className="h-3.5 w-3.5" />
-              )}
-              Make PR
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-1"
+            disabled={!ableToOpenPr || opening}
+            onClick={openPr}
+          >
+            {opening ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <GitPullRequest className="h-3.5 w-3.5" />
+            )}
+            Make PR
+          </Button>
         </div>
         {!repoLinked && (
           <div className="text-[10px] text-[var(--color-fg-subtle)]">
-            Link a GitHub repo on this project to enable PRs.
+            Link a GitHub repo on this project to enable commits & PRs.
           </div>
         )}
       </div>

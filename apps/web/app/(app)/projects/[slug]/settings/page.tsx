@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
 import { GithubLinkCard } from "@/components/github-link-card";
+import { ProjectDangerZone } from "@/components/project-danger-zone";
+import { ProjectIdentityCard } from "@/components/project-identity-card";
 import { RelocateCard } from "@/components/relocate-card";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
@@ -39,6 +41,13 @@ export default async function ProjectSettingsPage({
         </div>
       </header>
       <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
+        <ProjectIdentityCard
+          projectId={project.id}
+          initialName={project.name}
+          initialSlug={project.slug}
+          isExternal={project.is_external}
+          isScratch={project.is_scratch}
+        />
         <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elev)] p-5">
           <h2 className="mb-2 text-sm font-semibold">Path</h2>
           <div className="font-mono text-xs text-[var(--color-fg-muted)]">{project.local_path}</div>
@@ -57,6 +66,11 @@ export default async function ProjectSettingsPage({
         {!project.is_external && (
           <RelocateCard projectId={project.id} currentPath={project.local_path} />
         )}
+        <ProjectDangerZone
+          projectId={project.id}
+          projectName={project.name}
+          isScratch={project.is_scratch}
+        />
       </div>
     </div>
   );

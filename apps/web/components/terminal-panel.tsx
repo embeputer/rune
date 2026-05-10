@@ -7,9 +7,11 @@ import { fetchGatewayToken, openPtyWebSocket } from "@/lib/gateway-client";
 interface Props {
   cwd: string;
   gatewayId: string | null;
+  /** Server-rendered token. When supplied we skip the network fetch entirely. */
+  initialToken?: string | null;
 }
 
-export function TerminalPanel({ cwd, gatewayId }: Props) {
+export function TerminalPanel({ cwd, gatewayId, initialToken }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "closed" | "error">(
@@ -57,7 +59,8 @@ export function TerminalPanel({ cwd, gatewayId }: Props) {
 
       try {
         setStatus("connecting");
-        const { token } = await fetchGatewayToken(gatewayId);
+        const token =
+          initialToken ?? (await fetchGatewayToken(gatewayId)).token;
         if (cancelled) return;
         const ws = openPtyWebSocket(token, cwd);
         wsRef.current = ws;
@@ -125,7 +128,7 @@ export function TerminalPanel({ cwd, gatewayId }: Props) {
         // ignore
       }
     };
-  }, [cwd, gatewayId]);
+  }, [cwd, gatewayId, initialToken]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#0f1115]">

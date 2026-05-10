@@ -8,12 +8,34 @@ import type { UserSettingsCache } from "./user-settings";
 
 const FLUSH_MS = 600;
 
+interface ActiveTask {
+  ac: AbortController;
+  cancelled: boolean;
+}
+
 export class TaskRunner {
+  private active = new Map<string, ActiveTask>();
+
   constructor(
     private supabase: RuneSupabase,
     private cfg: GatewayConfig,
     private settings: UserSettingsCache,
   ) {}
+
+  /**
+   * Abort an in-flight task. Returns true if a controller was found locally.
+   * The caller (realtime UPDATE handler) drives this when the web app marks
+   * `tasks.status = 'cancelled'`. The terminal status row is written by the
+   * web API, so we only abort the child here and let the dispatch loop wind
+   * down without overwriting the cancelled state.
+   */
+  cancel(taskId: string): boolean {
+    const entry = this.active.get(taskId);
+    if (!entry || entry.cancelled) return false;
+    entry.cancelled = true;
+    entry.ac.abort();
+    return true;
+  }
 
   async dispatch(taskId: string): Promise<void> {
     // Atomic claim — only one gateway picks up the task.
@@ -65,65 +87,83 @@ export class TaskRunner {
     }
 
     const ac = new AbortController();
+    const active: ActiveTask = { ac, cancelled: false };
+    this.active.set(taskId, active);
+
     let totalOutput = "";
     let lastFlush = 0;
     let exitCode = 0;
     let exitErr: string | undefined;
+    let finalStatus: "done" | "error" = "done";
 
     try {
-      for await (const ev of runtime.execute({
-        prompt: payload.prompt,
-        cwd,
-        signal: ac.signal,
-        github_repo: payload.github_repo ?? null,
-        github_branch: payload.github_branch ?? null,
-      })) {
-        if (ev.type === "stdout" || ev.type === "stderr") {
-          totalOutput += ev.data;
-          if (Date.now() - lastFlush > FLUSH_MS) {
-            await this.flush(taskId, claimed.rune_id, messageId, totalOutput);
-            lastFlush = Date.now();
+      try {
+        for await (const ev of runtime.execute({
+          prompt: payload.prompt,
+          cwd,
+          signal: ac.signal,
+          github_repo: payload.github_repo ?? null,
+          github_branch: payload.github_branch ?? null,
+        })) {
+          if (ev.type === "stdout" || ev.type === "stderr") {
+            totalOutput += ev.data;
+            if (Date.now() - lastFlush > FLUSH_MS) {
+              await this.flush(taskId, claimed.rune_id, messageId, totalOutput);
+              lastFlush = Date.now();
+            }
+          } else if (ev.type === "exit") {
+            exitCode = ev.code;
+            exitErr = ev.error;
           }
-        } else if (ev.type === "exit") {
-          exitCode = ev.code;
-          exitErr = ev.error;
         }
+      } catch (err) {
+        exitCode = 1;
+        exitErr = (err as Error).message;
       }
-    } catch (err) {
-      exitCode = 1;
-      exitErr = (err as Error).message;
-    }
 
-    await this.flush(taskId, claimed.rune_id, messageId, totalOutput);
+      // Always flush the partial output so the user can see what the agent
+      // had said up to the point of cancellation.
+      await this.flush(taskId, claimed.rune_id, messageId, totalOutput);
 
-    const finalStatus = exitCode === 0 ? "done" : "error";
-    await this.supabase
-      .from("tasks")
-      .update({
-        status: finalStatus,
-        error: exitErr ?? null,
-        output: totalOutput,
-        completed_at: new Date().toISOString(),
-      })
-      .eq("id", taskId);
-    if (messageId) {
+      if (active.cancelled) {
+        // The web API already wrote terminal state for this task, message,
+        // and rune. Just persist the partial output (above) and bail without
+        // overwriting `cancelled` / `error` with our own status.
+        console.log(`[task] ${taskId} terminated (cancelled by user)`);
+        return;
+      }
+
+      finalStatus = exitCode === 0 ? "done" : "error";
       await this.supabase
-        .from("rune_messages")
+        .from("tasks")
         .update({
-          status: exitCode === 0 ? "done" : "error",
-          content: totalOutput,
+          status: finalStatus,
           error: exitErr ?? null,
+          output: totalOutput,
+          completed_at: new Date().toISOString(),
         })
-        .eq("id", messageId);
-      await this.supabase
-        .from("runes")
-        .update({ status: finalStatus })
-        .eq("id", claimed.rune_id);
-    } else {
-      await this.supabase
-        .from("runes")
-        .update({ status: finalStatus, output: totalOutput })
-        .eq("id", claimed.rune_id);
+        .eq("id", taskId);
+      if (messageId) {
+        await this.supabase
+          .from("rune_messages")
+          .update({
+            status: exitCode === 0 ? "done" : "error",
+            content: totalOutput,
+            error: exitErr ?? null,
+          })
+          .eq("id", messageId);
+        await this.supabase
+          .from("runes")
+          .update({ status: finalStatus })
+          .eq("id", claimed.rune_id);
+      } else {
+        await this.supabase
+          .from("runes")
+          .update({ status: finalStatus, output: totalOutput })
+          .eq("id", claimed.rune_id);
+      }
+    } finally {
+      this.active.delete(taskId);
     }
 
     // Persist rune body to disk so the local file reflects state. Skip for

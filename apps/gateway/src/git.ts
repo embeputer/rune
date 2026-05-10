@@ -61,9 +61,31 @@ function run(cmd: string, args: string[], cwd: string): Promise<RunResult> {
   });
 }
 
+// Whether a path is a git working tree rarely changes during the gateway
+// lifetime; cache positives forever and re-probe negatives with a short TTL
+// (so freshly-`git init`'d projects are picked up). Avoids one subprocess
+// spawn per status request — meaningful when polling at ~8s.
+const isRepoCache = new Map<string, { value: boolean; ts: number }>();
+const NEGATIVE_TTL_MS = 30_000;
+
+async function isInsideWorkTree(localPath: string): Promise<boolean> {
+  const hit = isRepoCache.get(localPath);
+  if (hit) {
+    if (hit.value) return true;
+    if (Date.now() - hit.ts < NEGATIVE_TTL_MS) return false;
+  }
+  const res = await run(
+    "git",
+    ["-C", localPath, "rev-parse", "--is-inside-work-tree"],
+    localPath,
+  );
+  const value = res.code === 0;
+  isRepoCache.set(localPath, { value, ts: Date.now() });
+  return value;
+}
+
 export async function gitStatus(project: ProjectLookup): Promise<GitStatus> {
-  const branchRes = await run("git", ["-C", project.localPath, "rev-parse", "--is-inside-work-tree"], project.localPath);
-  if (branchRes.code !== 0) {
+  if (!(await isInsideWorkTree(project.localPath))) {
     return { branch: null, ahead: 0, behind: 0, files: [], diff: "", isRepo: false };
   }
 
@@ -78,23 +100,33 @@ export async function gitStatus(project: ProjectLookup): Promise<GitStatus> {
 
   const { branch, ahead, behind, files } = parsePorcelainV2(status.stdout);
 
-  // Combined diff: staged + unstaged + untracked (new files via /dev/null diff).
-  const [unstaged, staged] = await Promise.all([
+  // Fast path: clean working tree → skip the 2-4 diff subprocesses entirely.
+  // This is the common case when polling and saves ~50-150ms per tick on a
+  // typical repo.
+  if (files.length === 0) {
+    return { branch, ahead, behind, files, diff: "", isRepo: true };
+  }
+
+  // Run staged + unstaged diffs in parallel. Untracked files are also done
+  // in parallel via Promise.all.
+  const untracked = files.filter((f) => f.status === "??");
+  const [unstaged, staged, ...synthetics] = await Promise.all([
     run("git", ["-C", project.localPath, "diff", "--no-color"], project.localPath),
     run("git", ["-C", project.localPath, "diff", "--cached", "--no-color"], project.localPath),
-  ]);
-  let diff = "";
-  if (staged.stdout) diff += staged.stdout;
-  if (unstaged.stdout) diff += (diff ? "\n" : "") + unstaged.stdout;
-  for (const f of files) {
-    if (f.status === "??") {
-      const synthetic = await run(
+    ...untracked.map((f) =>
+      run(
         "git",
         ["-C", project.localPath, "diff", "--no-color", "--no-index", "/dev/null", f.path],
         project.localPath,
-      );
-      if (synthetic.stdout) diff += (diff ? "\n" : "") + synthetic.stdout;
-    }
+      ),
+    ),
+  ]);
+
+  let diff = "";
+  if (staged.stdout) diff += staged.stdout;
+  if (unstaged.stdout) diff += (diff ? "\n" : "") + unstaged.stdout;
+  for (const synthetic of synthetics) {
+    if (synthetic.stdout) diff += (diff ? "\n" : "") + synthetic.stdout;
   }
 
   return { branch, ahead, behind, files, diff, isRepo: true };

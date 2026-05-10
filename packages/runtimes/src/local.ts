@@ -1,6 +1,10 @@
 import type { RuntimeId } from "@rune/shared";
 import { probeVersion, spawnRuntime } from "./spawn-helper";
-import { formatAnthropicStreamEvent, parseStreamJson } from "./stream-json";
+import {
+  formatAnthropicStreamEvent,
+  formatCursorAgentStreamEvent,
+  parseStreamJson,
+} from "./stream-json";
 import type { ExecuteInput, RuneEvent, Runtime } from "./types";
 
 abstract class CliRuntime implements Runtime {
@@ -33,14 +37,23 @@ export class CursorAgentRuntime extends CliRuntime {
   bin = "cursor-agent";
   buildArgs(input: ExecuteInput) {
     // `--trust` skips the "Trust this directory?" prompt that otherwise blocks
-    // headless execution. Prompt is piped via stdin to avoid shell quoting issues.
+    // headless execution. `--stream-partial-output` upgrades the stream-json
+    // format from "one event per assistant message" to character-level deltas
+    // so the user sees text as it's generated. Prompt goes via stdin to avoid
+    // shell-quoting headaches.
     return {
-      args: ["-p", "--trust", "--output-format", "stream-json"],
+      args: [
+        "-p",
+        "--trust",
+        "--output-format",
+        "stream-json",
+        "--stream-partial-output",
+      ],
       promptStdin: input.prompt,
     };
   }
   execute(input: ExecuteInput) {
-    return parseStreamJson(super.execute(input), formatAnthropicStreamEvent);
+    return parseStreamJson(super.execute(input), formatCursorAgentStreamEvent);
   }
 }
 

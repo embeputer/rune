@@ -95,8 +95,16 @@ export async function POST(
     );
   }
 
-  // Insert user message + pending assistant message.
-  const nowUser = new Date().toISOString();
+  // Insert user message + pending assistant message. Both timestamps come
+  // from the API server's clock so they're directly comparable — using
+  // Postgres `default now()` for one and a JS-set value for the other was
+  // racy (clock skew between web server and Supabase could flip the order
+  // on the wire, making the agent's reply render *above* the prompt that
+  // triggered it).
+  const baseMs = Date.now();
+  const userCreatedAt = new Date(baseMs).toISOString();
+  const assistantCreatedAt = new Date(baseMs + 1).toISOString();
+
   const { data: userMsg, error: userMsgErr } = await supabase
     .from("rune_messages")
     .insert({
@@ -105,7 +113,7 @@ export async function POST(
       role: "user",
       content: parsed.data.content,
       status: "done",
-      created_at: nowUser,
+      created_at: userCreatedAt,
     })
     .select("*")
     .single();
@@ -122,6 +130,7 @@ export async function POST(
       content: "",
       status: "pending",
       runtime,
+      created_at: assistantCreatedAt,
     })
     .select("*")
     .single();

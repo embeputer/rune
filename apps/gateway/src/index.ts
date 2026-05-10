@@ -100,6 +100,24 @@ export async function startGateway(initialCfg: GatewayConfig): Promise<() => Pro
         }
       },
     )
+    .on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "tasks",
+        filter: `gateway_id=eq.${gatewayId}`,
+      },
+      async (payload) => {
+        // The web app marks tasks.status='cancelled' when the user hits Stop.
+        // We pick that up here and abort the matching child process.
+        const t = payload.new as { id: string; status: string };
+        if (t.status === "cancelled") {
+          const aborted = tasks.cancel(t.id);
+          if (aborted) console.log(`[task] ${t.id} cancel signal received`);
+        }
+      },
+    )
     .subscribe();
 
   const commandChannel = supabase

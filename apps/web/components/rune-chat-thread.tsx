@@ -1,7 +1,7 @@
 "use client";
 
 import type { RuneMessageRow } from "@rune/shared";
-import { Loader2, Send, User as UserIcon } from "lucide-react";
+import { Loader2, Send, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -18,18 +18,25 @@ export function RuneChatThread({ runeId, initialMessages }: Props) {
   const [messages, setMessages] = useState<RuneMessageRow[]>(initialMessages);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isStreaming = useMemo(
-    () => messages.some((m) => m.role === "assistant" && (m.status === "streaming" || m.status === "pending")),
+    () =>
+      messages.some(
+        (m) =>
+          m.role === "assistant" && (m.status === "streaming" || m.status === "pending"),
+      ),
     [messages],
   );
 
   const upsert = useCallback((msg: RuneMessageRow) => {
     setMessages((prev) => {
       const idx = prev.findIndex((m) => m.id === msg.id);
-      if (idx === -1) return [...prev, msg].sort((a, b) => a.created_at.localeCompare(b.created_at));
+      if (idx === -1) {
+        return [...prev, msg].sort(compareMessages);
+      }
       const next = prev.slice();
       next[idx] = msg;
       return next;
@@ -73,7 +80,7 @@ export function RuneChatThread({ runeId, initialMessages }: Props) {
 
   async function send() {
     const content = draft.trim();
-    if (!content || sending) return;
+    if (!content || sending || isStreaming) return;
     setSending(true);
     try {
       const res = await fetch(`/api/runes/${runeId}/messages`, {
@@ -94,22 +101,48 @@ export function RuneChatThread({ runeId, initialMessages }: Props) {
     }
   }
 
+  async function stop() {
+    if (stopping) return;
+    setStopping(true);
+    try {
+      const res = await fetch(`/api/runes/${runeId}/cancel`, { method: "POST" });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error ?? "stop failed");
+      // Realtime will surface the status change; nudge local state too.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.role === "assistant" && (m.status === "pending" || m.status === "streaming")
+            ? { ...m, status: "error", error: m.error ?? "cancelled by user" }
+            : m,
+        ),
+      );
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setStopping(false);
+    }
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      void send();
+      if (isStreaming) {
+        void stop();
+      } else {
+        void send();
+      }
     }
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
         {messages.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-[var(--color-fg-subtle)]">
             Send a message to start the conversation.
           </div>
         ) : (
-          messages.map((m) => <MessageBubble key={m.id} message={m} />)
+          messages.map((m) => <Message key={m.id} message={m} />)
         )}
       </div>
       <div className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-bg-elev)] px-4 py-3">
@@ -119,7 +152,7 @@ export function RuneChatThread({ runeId, initialMessages }: Props) {
             className="flex-1 resize-none bg-transparent px-2 py-1 text-sm text-[var(--color-fg)] outline-none placeholder:text-[var(--color-fg-subtle)]"
             placeholder={
               isStreaming
-                ? "Agent is replying… you can still type the next message"
+                ? "Press stop to cancel, or wait for the response…"
                 : "Send a message…"
             }
             value={draft}
@@ -127,58 +160,120 @@ export function RuneChatThread({ runeId, initialMessages }: Props) {
             onKeyDown={onKeyDown}
             rows={1}
           />
-          <Button size="sm" onClick={send} disabled={!draft.trim() || sending}>
-            {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-            Send
-          </Button>
+          {isStreaming ? (
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={stop}
+              disabled={stopping}
+              title="Stop the running task"
+            >
+              {stopping ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Square className="h-3 w-3 fill-current" />
+              )}
+              Stop
+            </Button>
+          ) : (
+            <Button size="sm" onClick={send} disabled={!draft.trim() || sending}>
+              {sending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5" />
+              )}
+              Send
+            </Button>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function MessageBubble({ message }: { message: RuneMessageRow }) {
-  const isUser = message.role === "user";
-  const isStreaming = message.role === "assistant" && (message.status === "streaming" || message.status === "pending");
+function Message({ message }: { message: RuneMessageRow }) {
+  if (message.role === "user") return <UserBubble message={message} />;
+  return <AssistantText message={message} />;
+}
+
+/**
+ * Sort by created_at ascending, but if two messages share an exact timestamp
+ * (rare, but possible when the API stamps both rows in the same millisecond),
+ * always render the user prompt before its assistant reply.
+ */
+function compareMessages(a: RuneMessageRow, b: RuneMessageRow): number {
+  const cmp = a.created_at.localeCompare(b.created_at);
+  if (cmp !== 0) return cmp;
+  if (a.role === b.role) return 0;
+  return a.role === "user" ? -1 : 1;
+}
+
+function UserBubble({ message }: { message: RuneMessageRow }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[78%] rounded-2xl bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-fg)] shadow-sm">
+        <div className="whitespace-pre-wrap break-words leading-snug">{message.content}</div>
+      </div>
+    </div>
+  );
+}
+
+function AssistantText({ message }: { message: RuneMessageRow }) {
+  const isStreaming = message.status === "streaming" || message.status === "pending";
   const isError = message.status === "error";
 
+  if (!message.content && isStreaming) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-[var(--color-fg-subtle)]">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        {message.status === "pending" ? "queued" : "thinking"}…
+        <Elapsed since={message.created_at} />
+      </div>
+    );
+  }
+
+  if (!message.content && isError) {
+    return (
+      <div className="text-xs text-red-400">
+        {message.error ?? "task failed"}
+      </div>
+    );
+  }
+
+  if (!message.content) {
+    return <div className="text-xs text-[var(--color-fg-subtle)]">(no output)</div>;
+  }
+
   return (
-    <div className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
-      {!isUser && (
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)]/15 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-accent)]">
-          AI
+    <div className="space-y-1">
+      <div className="prose-rune prose-rune--compact text-[var(--color-fg)]">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+      </div>
+      {isStreaming && (
+        <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-fg-subtle)]">
+          <Loader2 className="h-3 w-3 animate-spin" /> streaming
+          <Elapsed since={message.created_at} />
         </div>
       )}
-      <div
-        className={`prose-rune prose-rune--compact max-w-[78%] rounded-lg px-3.5 py-2.5 text-sm shadow-sm ${
-          isUser
-            ? "bg-[var(--color-accent)]/12 text-[var(--color-fg)]"
-            : "border border-[var(--color-border)] bg-[var(--color-bg-elev)] text-[var(--color-fg)]"
-        } ${isError ? "border-red-500/40" : ""}`}
-      >
-        {message.content ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-        ) : isStreaming ? (
-          <div className="flex items-center gap-2 text-xs text-[var(--color-fg-subtle)]">
-            <Loader2 className="h-3 w-3 animate-spin" /> {message.status === "pending" ? "queued" : "thinking"}…
-          </div>
-        ) : (
-          <div className="text-xs text-[var(--color-fg-subtle)]">(empty)</div>
-        )}
-        {isError && message.error && (
-          <div className="mt-2 text-xs text-red-400">{message.error}</div>
-        )}
-        {isStreaming && message.content && (
-          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-[var(--color-fg-subtle)]">
-            <Loader2 className="h-3 w-3 animate-spin" /> streaming
-          </div>
-        )}
-      </div>
-      {isUser && (
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-bg-elev-2)] text-[var(--color-fg-muted)]">
-          <UserIcon className="h-3.5 w-3.5" />
-        </div>
+      {isError && message.error && (
+        <div className="text-xs text-red-400">{message.error}</div>
       )}
     </div>
   );
+}
+
+/**
+ * Tiny ticking clock so "thinking…" never feels frozen — updates every second
+ * from the message's created_at. Format: "5s", "1m12s".
+ */
+function Elapsed({ since }: { since: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const startedAt = useMemo(() => new Date(since).getTime(), [since]);
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  const label = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+  return <span className="tabular-nums">{label}</span>;
 }

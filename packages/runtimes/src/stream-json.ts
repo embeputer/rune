@@ -62,9 +62,98 @@ export async function* parseStreamJson(
 }
 
 /**
- * Format a Cursor Agent / Claude Code stream-json event line.
- * Spec: https://docs.anthropic.com/en/docs/claude-code/cli-reference (claude)
- *       cursor-agent uses a near-identical event stream.
+ * Format a cursor-agent stream-json event line. cursor-agent diverges from
+ * Claude Code in two important ways:
+ *
+ *   1. Tool activity is surfaced as standalone `tool_call` events (with
+ *      subtype `started` / `completed`) rather than inline `tool_use` /
+ *      `tool_result` blocks inside assistant content.
+ *
+ *   2. With `--stream-partial-output`, every text delta is its own
+ *      `assistant` event. The CLI also emits two duplicate flush events
+ *      per turn that we must drop, distinguishable by the presence/absence
+ *      of `timestamp_ms` and `model_call_id` (see Cursor docs):
+ *
+ *        | timestamp_ms | model_call_id | meaning              | action |
+ *        | -----------  | ------------- | -------------------- | ------ |
+ *        | present      | absent        | streaming delta      | EMIT   |
+ *        | present      | present       | pre-tool-call flush  | SKIP   |
+ *        | absent       | absent        | end-of-turn flush    | SKIP   |
+ *
+ * Spec: https://cursor.com/docs/cli/reference/output-format
+ */
+export function formatCursorAgentStreamEvent(value: JsonValue): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const v = value as Record<string, JsonValue>;
+  const type = typeof v.type === "string" ? v.type : "";
+
+  if (type === "system") {
+    const subtype = typeof v.subtype === "string" ? v.subtype : "";
+    if (subtype === "init") {
+      const model = typeof v.model === "string" ? v.model : "";
+      // A tiny header so the user immediately sees the agent has started, even
+      // if the first reasoning step takes a few seconds.
+      return model ? `▸ ${model}\n\n` : "▸ Starting…\n\n";
+    }
+    return null;
+  }
+
+  // User events are the echoed prompt — never useful in chat output.
+  if (type === "user") return null;
+
+  if (type === "assistant") {
+    const hasTs = v.timestamp_ms !== undefined && v.timestamp_ms !== null;
+    const hasModelCallId = v.model_call_id !== undefined && v.model_call_id !== null;
+    // Only the live deltas have timestamp_ms AND no model_call_id. The two
+    // flush variants would re-emit text we've already streamed.
+    if (!hasTs || hasModelCallId) return null;
+
+    const message = v.message;
+    if (!message || typeof message !== "object" || Array.isArray(message)) return null;
+    const content = (message as Record<string, JsonValue>).content;
+    return formatContentBlocks(content);
+  }
+
+  if (type === "tool_call") {
+    const subtype = typeof v.subtype === "string" ? v.subtype : "";
+    if (subtype !== "started") return null; // ignore `completed` to keep noise down
+
+    const toolCall = v.tool_call;
+    if (!toolCall || typeof toolCall !== "object" || Array.isArray(toolCall)) return null;
+    const tc = toolCall as Record<string, JsonValue>;
+
+    // The tool wrapper key is the tool name (e.g. readToolCall, writeToolCall,
+    // runTerminalCommand, ...). Strip the camelCase suffix for a friendlier
+    // label and summarize the args' most-likely-relevant field.
+    const toolKey = Object.keys(tc)[0] ?? "tool";
+    const inner = tc[toolKey];
+    const args =
+      inner && typeof inner === "object" && !Array.isArray(inner)
+        ? ((inner as Record<string, JsonValue>).args as JsonValue | undefined)
+        : undefined;
+
+    const friendly = humanizeCursorToolName(toolKey);
+    const summary = summarizeToolInput(args);
+    return `\n· ${friendly}${summary ? ` ${summary}` : ""}\n`;
+  }
+
+  // `result` events are the terminal summary — we already have the text.
+  if (type === "result") return null;
+
+  return null;
+}
+
+function humanizeCursorToolName(key: string): string {
+  // Examples seen: readToolCall, writeToolCall, runTerminalCommand, listDirToolCall.
+  return key
+    .replace(/ToolCall$/i, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .toLowerCase();
+}
+
+/**
+ * Format a Claude Code stream-json event line.
+ * Spec: https://docs.anthropic.com/en/docs/claude-code/cli-reference
  */
 export function formatAnthropicStreamEvent(value: JsonValue): string | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;

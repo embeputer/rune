@@ -19,9 +19,19 @@ interface Props {
   cwd: string;
   githubRepo: string | null;
   gatewayId: string | null;
+  /** Pre-fetched gateway client token (server-rendered). When present we skip
+   *  the per-mount HTTP roundtrip to /api/gateways/:id/token. */
+  gatewayToken: string | null;
 }
 
-export function RuneSidePanel({ runeId, projectId, cwd, githubRepo, gatewayId }: Props) {
+export function RuneSidePanel({
+  runeId,
+  projectId,
+  cwd,
+  githubRepo,
+  gatewayId,
+  gatewayToken,
+}: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [tab, setTab] = useState<Tab>("diffs");
@@ -167,9 +177,14 @@ export function RuneSidePanel({ runeId, projectId, cwd, githubRepo, gatewayId }:
               projectId={projectId}
               githubRepo={githubRepo}
               gatewayId={gatewayId}
+              initialToken={gatewayToken}
             />
           ) : (
-            <TerminalPanel cwd={cwd} gatewayId={gatewayId} />
+            <TerminalPanel
+              cwd={cwd}
+              gatewayId={gatewayId}
+              initialToken={gatewayToken}
+            />
           )}
         </div>
       </div>

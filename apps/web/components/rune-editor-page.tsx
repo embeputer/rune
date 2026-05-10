@@ -10,6 +10,7 @@ import {
 } from "@rune/shared";
 import { FileText, MessageSquare, Play, Square } from "lucide-react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,7 +20,6 @@ import { RuneChatThread } from "@/components/rune-chat-thread";
 import { RuneSidePanel } from "@/components/rune-side-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -52,6 +52,8 @@ interface RuneInit {
 
 interface ProjectInit {
   id: string;
+  name: string;
+  slug: string;
   localPath: string;
   githubRepo: string | null;
   isScratch: boolean;
@@ -63,12 +65,14 @@ export function RuneEditorPage({
   cloudReady,
   initialMessages,
   onlineGatewayId,
+  onlineGatewayToken,
 }: {
   rune: RuneInit;
   project: ProjectInit;
   cloudReady: boolean;
   initialMessages: RuneMessageRow[];
   onlineGatewayId: string | null;
+  onlineGatewayToken: string | null;
 }) {
   const [title, setTitle] = useState(rune.title);
   const [body, setBody] = useState(rune.body);
@@ -147,19 +151,19 @@ export function RuneEditorPage({
 
   return (
     <div className="grid flex-1 grid-rows-[auto_1fr] overflow-hidden">
-      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-elev)] px-6 py-3">
-        <Input
-          className="max-w-md text-base font-semibold"
-          value={title}
-          onChange={(e) => {
-            setTitle(e.target.value);
-            scheduleSave({ title: e.target.value });
+      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-elev)] px-6 py-2.5">
+        <Breadcrumb
+          projectName={project.name}
+          projectSlug={project.slug}
+          title={title}
+          onTitleChange={(v) => {
+            setTitle(v);
+            scheduleSave({ title: v });
           }}
-          placeholder="Untitled rune"
+          status={status}
         />
-        <Badge variant={STATUS_VARIANT[status]}>{status}</Badge>
-        <ModeToggle mode={mode} onChange={flipMode} />
         <div className="ml-auto flex items-center gap-2">
+          <ModeToggle mode={mode} onChange={flipMode} />
           <Select
             value={runtime}
             onValueChange={(v) => {
@@ -168,7 +172,7 @@ export function RuneEditorPage({
               scheduleSave({ runtime: r });
             }}
           >
-            <SelectTrigger className="w-44">
+            <SelectTrigger className="h-8 w-44">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -190,7 +194,7 @@ export function RuneEditorPage({
             </SelectContent>
           </Select>
           {mode === "doc" && (
-            <Button onClick={run} disabled={running}>
+            <Button size="sm" onClick={run} disabled={running}>
               {running ? (
                 <>
                   <Square className="h-3.5 w-3.5" /> Running…
@@ -225,9 +229,114 @@ export function RuneEditorPage({
           cwd={project.localPath}
           githubRepo={project.githubRepo}
           gatewayId={onlineGatewayId}
+          gatewayToken={onlineGatewayToken}
           initialMessages={initialMessages}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Top-bar breadcrumb: `project / <click-to-edit rune title> [status]`.
+ *
+ * The title is rendered as plain text by default. Clicking it swaps in an
+ * input that's auto-focused and selects all the existing text, so the user
+ * can either replace or edit. Pressing Enter or blurring commits; Escape
+ * cancels.
+ */
+function Breadcrumb({
+  projectName,
+  projectSlug,
+  title,
+  onTitleChange,
+  status,
+}: {
+  projectName: string;
+  projectSlug: string;
+  title: string;
+  onTitleChange: (next: string) => void;
+  status: RuneStatus;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Keep the local draft in sync if the parent updates the title (e.g. from
+  // a realtime row patch) while we're not actively editing.
+  useEffect(() => {
+    if (!editing) setDraft(title);
+  }, [title, editing]);
+
+  function startEditing() {
+    setDraft(title);
+    setEditing(true);
+    // Focus + select-all on the next tick so the input is mounted.
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.select();
+    });
+  }
+
+  function commit() {
+    setEditing(false);
+    const next = draft.trim();
+    if (next && next !== title) onTitleChange(next);
+    else setDraft(title);
+  }
+
+  function cancel() {
+    setDraft(title);
+    setEditing(false);
+  }
+
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <Link
+        href={`/projects/${projectSlug}`}
+        className="shrink-0 truncate text-sm text-[var(--color-fg-muted)] transition hover:text-[var(--color-fg)]"
+        title={projectName}
+      >
+        {projectName}
+      </Link>
+      <span className="shrink-0 text-sm text-[var(--color-fg-subtle)]">/</span>
+      {editing ? (
+        <input
+          ref={inputRef}
+          className="min-w-[10rem] max-w-md flex-1 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-bg)] px-1.5 py-0.5 text-base font-semibold text-[var(--color-fg)] outline-none focus:border-[var(--color-accent)]"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            }
+          }}
+          placeholder="Untitled rune"
+          spellCheck={false}
+          aria-label="Rune title"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={startEditing}
+          className="min-w-0 max-w-md truncate rounded-md px-1.5 py-0.5 text-left text-base font-semibold text-[var(--color-fg)] transition hover:bg-[var(--color-bg-elev-2)]"
+          title="Click to rename"
+        >
+          {title || (
+            <span className="text-[var(--color-fg-subtle)]">Untitled rune</span>
+          )}
+        </button>
+      )}
+      <Badge variant={STATUS_VARIANT[status]} className="shrink-0">
+        {status}
+      </Badge>
     </div>
   );
 }
@@ -337,6 +446,7 @@ function ChatLayout({
   cwd,
   githubRepo,
   gatewayId,
+  gatewayToken,
   initialMessages,
 }: {
   runeId: string;
@@ -344,6 +454,7 @@ function ChatLayout({
   cwd: string;
   githubRepo: string | null;
   gatewayId: string | null;
+  gatewayToken: string | null;
   initialMessages: RuneMessageRow[];
 }) {
   return (
@@ -357,6 +468,7 @@ function ChatLayout({
         cwd={cwd}
         githubRepo={githubRepo}
         gatewayId={gatewayId}
+        gatewayToken={gatewayToken}
       />
     </div>
   );

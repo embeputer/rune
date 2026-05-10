@@ -26,19 +26,49 @@ export interface FetchTokenResult {
 /**
  * Fetch the local gateway's client_token from our own API (which is
  * RLS-scoped to the signed-in user).
+ *
+ * Result is memoized per `gatewayId` for a short TTL, and concurrent calls
+ * share a single in-flight Promise. This collapses the case where the diff
+ * panel and terminal panel mount simultaneously and each independently
+ * triggers a 1+ second auth-ed roundtrip — instead they cooperate on one.
  */
+const TOKEN_TTL_MS = 60_000;
+const tokenCache = new Map<string, { result: FetchTokenResult; ts: number }>();
+const tokenInflight = new Map<string, Promise<FetchTokenResult>>();
+
 export async function fetchGatewayToken(gatewayId: string): Promise<FetchTokenResult> {
-  const res = await fetch(`/api/gateways/${gatewayId}/token`, { cache: "no-store" });
-  if (!res.ok) {
-    const j = await res.json().catch(() => ({}));
-    throw new Error(j.error ?? `failed to fetch gateway token (${res.status})`);
+  const cached = tokenCache.get(gatewayId);
+  if (cached && Date.now() - cached.ts < TOKEN_TTL_MS) return cached.result;
+
+  const inflight = tokenInflight.get(gatewayId);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    const res = await fetch(`/api/gateways/${gatewayId}/token`, { cache: "no-store" });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error ?? `failed to fetch gateway token (${res.status})`);
+    }
+    const body = (await res.json()) as {
+      client_token: string;
+      status: "online" | "offline";
+      last_seen_at: string;
+    };
+    return {
+      token: body.client_token,
+      status: body.status,
+      lastSeenAt: body.last_seen_at,
+    } satisfies FetchTokenResult;
+  })();
+
+  tokenInflight.set(gatewayId, promise);
+  try {
+    const result = await promise;
+    tokenCache.set(gatewayId, { result, ts: Date.now() });
+    return result;
+  } finally {
+    tokenInflight.delete(gatewayId);
   }
-  const body = (await res.json()) as {
-    client_token: string;
-    status: "online" | "offline";
-    last_seen_at: string;
-  };
-  return { token: body.client_token, status: body.status, lastSeenAt: body.last_seen_at };
 }
 
 /**

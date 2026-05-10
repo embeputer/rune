@@ -1,9 +1,6 @@
 import type { RuneMessageRow } from "@rune/shared";
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronLeft } from "lucide-react";
 import { RuneEditorPage } from "@/components/rune-editor-page";
-import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 
 const HEARTBEAT_GRACE_MS = 60_000;
@@ -45,7 +42,7 @@ export default async function RunePage({
       .order("created_at", { ascending: true }),
     supabase
       .from("gateways")
-      .select("id, status, last_seen_at")
+      .select("id, status, last_seen_at, client_token")
       .eq("user_id", user.id)
       .eq("status", "online")
       .order("last_seen_at", { ascending: false })
@@ -53,20 +50,16 @@ export default async function RunePage({
       .maybeSingle(),
   ]);
 
-  const onlineGatewayId =
-    gateway && Date.now() - new Date(gateway.last_seen_at).getTime() <= HEARTBEAT_GRACE_MS
-      ? gateway.id
-      : null;
+  // Resolve "online and recently heartbeating" once on the server so the
+  // client doesn't have to round-trip to /api/gateways/:id/token on mount.
+  // The gateway's client_token comes straight along on the same query.
+  const isFresh =
+    gateway && Date.now() - new Date(gateway.last_seen_at).getTime() <= HEARTBEAT_GRACE_MS;
+  const onlineGatewayId = isFresh ? gateway.id : null;
+  const onlineGatewayToken = isFresh ? (gateway.client_token ?? null) : null;
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-elev)] px-6 py-3">
-        <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link href={`/projects/${project.slug}`}>
-            <ChevronLeft className="h-3.5 w-3.5" /> {project.name}
-          </Link>
-        </Button>
-      </header>
       <RuneEditorPage
         rune={{
           id: rune.id,
@@ -80,6 +73,8 @@ export default async function RunePage({
         }}
         project={{
           id: project.id,
+          name: project.name,
+          slug: project.slug,
           localPath: project.local_path,
           githubRepo: project.github_repo,
           isScratch: project.is_scratch,
@@ -87,6 +82,7 @@ export default async function RunePage({
         cloudReady={Boolean(project.github_repo)}
         initialMessages={(messages ?? []) as RuneMessageRow[]}
         onlineGatewayId={onlineGatewayId}
+        onlineGatewayToken={onlineGatewayToken}
       />
     </div>
   );
